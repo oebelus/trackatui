@@ -1,27 +1,39 @@
 use std::fmt::Debug;
+use std::i64::MAX;
 use std::io::BufReader;
-use std::{env, io};
+use std::time::{Duration, Instant};
+use std::{cmp, env, io};
 use std::fs::{self, File};
 use std::path::Path;
 
+use color_eyre::owo_colors::OwoColorize;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::DefaultTerminal;
 use ratatui::prelude::*;
-use ratatui::style::palette::tailwind::SLATE;
-use ratatui::widgets::{Block, Borders, HighlightSpacing, List, ListItem, ListState};
+use ratatui::style::palette::tailwind::{self, SLATE};
+use ratatui::widgets::{Block, BorderType, Borders, Gauge, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph};
 
 use rodio::{OutputStream, Sink};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::probe::Hint;
 use symphonia::default::get_probe;
+use tui_big_text::{BigText, PixelSize};
 
 pub struct App {
     playlist: Playlist,
     current: Track,
     sink: Sink,
     stream: OutputStream,
-    exit: bool,
+    start_time: Instant,
+    position: Duration,
+    ratio: u64,
+    mode: u8,
+    navigation: u8,
+    state: AppState,
 }
+
+/* Modes: (1) normal mode, (2) repeat mode, (3) shuffle mode */
+/* Navigation: (1) playlist, (2) toolkit */
 
 #[derive(Debug, Default)]
 pub struct Playlist {
@@ -35,7 +47,13 @@ pub struct Track {
     path: String,
     playing: bool,
     duration: u64,
-    progress: usize
+}
+
+#[derive(PartialEq)]
+enum AppState {
+    Running,
+    Started,
+    Quitting,
 }
 
 const SELECTED_STYLE: Style = Style::new().bg(SLATE.c800).add_modifier(Modifier::BOLD);
@@ -59,13 +77,12 @@ fn main() -> color_eyre::Result<()> {
 }
 
 impl Track {
-    fn new(name: String, path: String, progress: usize) -> Self {
+    fn new(name: String, path: String) -> Self {
         Self {
             name,
             path: path.clone(),
             playing: false,
             duration: Self::calculate_duration(path).unwrap(),
-            progress: progress,
         }
     }
 
@@ -111,25 +128,35 @@ impl App {
             current: tracks[0].clone(),
             sink,
             stream,
-            exit: false,
+            mode: 1,
+            start_time: Instant::now(),
+            position: Duration::from_secs(0),
+            state: AppState::Started,
+            ratio: 0,
+            navigation: 1,
         }
     }
 
     pub fn run(mut self, terminal: &mut DefaultTerminal, tracks: Vec<Track>) -> io::Result<()> {        
         self.playlist.tracks = tracks;
         
-        while !self.exit {
+        while self.state != AppState::Quitting {
             terminal.draw(|frame| frame.render_widget(&mut self, frame.area()))?;
             if let Event::Key(key) = event::read()? {
                 self.handle_key(key);
-                
-                if self.current.playing {
-                    self.play_track();
-                }
-
+                self.update();
             };
         }
         Ok(())
+    }
+
+    fn update(&mut self) {
+        if self.state != AppState::Running {
+            return;
+        }
+
+        self.position = Duration::from_secs(self.elapsed_duration());
+        self.ratio = self.calculate_ratio();
     }
 
     fn render_explorer(&mut self, area: Rect, buf: &mut Buffer) {
@@ -161,12 +188,92 @@ impl App {
         let title = Line::raw(self.current.name.clone()).centered()
             .bg(SLATE.c950);
 
+        let total_duration = Line::raw(self.current.duration.to_string());
+
+        let elapsed = Line::from(self.elapsed_duration().to_string()).left_aligned();
+
         let block = Block::new()
             .title(title)
+            .title_bottom(total_duration)
+            .title_top(elapsed)
             .borders(Borders::ALL)
             .bg(SLATE.c950);
 
-        Widget::render(block, area, buf);
+        Gauge::default()
+            .block(block)
+            .gauge_style(tailwind::CYAN.c800)
+            .percent(self.ratio.try_into().unwrap())
+            .render(area, buf);
+    }
+
+    fn render_toolkit(&mut self, area: Rect, buf: &mut Buffer) {
+        let toolkit = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![
+                Constraint::Percentage(20), /* Repeat */
+                Constraint::Percentage(60), /* play */
+                Constraint::Percentage(20), /* shuffle */
+            ])
+            .split(area);
+
+        Paragraph::new("↻")
+            .centered()
+            .style(Style::default().fg(tailwind::CYAN.c400).bg(tailwind::SLATE.c950))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+            )
+        .render(toolkit[0], buf);
+
+        Paragraph::new("↳↰")
+            .centered()
+            .style(Style::default().fg(tailwind::CYAN.c400).bg(tailwind::SLATE.c950))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+            )
+        .render(toolkit[2], buf);
+
+        let play = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![
+                Constraint::Percentage(33), /* Backward */
+                Constraint::Percentage(33), /* play */
+                Constraint::Percentage(33), /* Forward */
+            ]).split(toolkit[1]);
+
+        Paragraph::new("⏮")
+            .centered()
+            .style(Style::default().fg(tailwind::CYAN.c400).bg(tailwind::SLATE.c950))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+            )
+        .render(play[0], buf);
+
+    Paragraph::new("▶")
+            .centered()
+            .style(Style::default().fg(tailwind::CYAN.c400).bg(tailwind::SLATE.c950))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+            )
+        .render(play[1], buf);
+
+    Paragraph::new("⏭")
+            .centered()
+            .style(Style::default().fg(tailwind::CYAN.c400).bg(tailwind::SLATE.c950))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+            )
+        .render(play[2], buf);
+    
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
@@ -174,7 +281,7 @@ impl App {
             return;
         }
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.exit = true,
+            KeyCode::Char('q') | KeyCode::Esc => self.state = AppState::Quitting,
             KeyCode::Char('h') | KeyCode::Left => self.select_none(),
             KeyCode::Char('j') | KeyCode::Down => self.select_next(),
             KeyCode::Char('k') | KeyCode::Up => self.select_previous(),
@@ -221,11 +328,31 @@ impl App {
     }
 
     fn play_track(&mut self) {
+        self.stop_track();
+
+        self.state = AppState::Running;
+
         let file = BufReader::new(File::open(self.current.path.clone()).unwrap());
         
         self.sink = rodio::play(&self.stream.mixer(), file).unwrap();
+    }
 
-        // std::thread::sleep(std::time::Duration::from_secs(5));
+    fn stop_track(&mut self) {
+        self.state = AppState::Started;
+        self.start_time = Instant::now();
+    }
+
+    fn elapsed_duration(&mut self) -> u64 {
+        let elapsed = (Instant::now() - self.start_time).as_secs();
+
+        if elapsed > self.current.duration {
+            return self.current.duration;
+        }
+        (Instant::now() - self.start_time).as_secs()
+    }
+
+    fn calculate_ratio(&self) -> u64 {
+        cmp::max((self.position.as_secs() * 100) / self.current.duration, 100)
     }
 }
 
@@ -251,7 +378,7 @@ impl Widget for &mut App {
             .direction(Direction::Vertical)
             .constraints(vec![
                 Constraint::Percentage(70), /* Information */
-                Constraint::Percentage(30), /* Player */
+                Constraint::Percentage(30), /* Toolkit */
             ])
             .split(general_layout[1]);
         
@@ -260,10 +387,9 @@ impl Widget for &mut App {
 
         /* Information */
         App::render_information(self, music_player[0], buffer);
-        // frame.render_widget(
-        //     Paragraph::new("Information")
-        //         .block(Block::new().borders(Borders::ALL)),
-        //     music_player[0]);
+
+        /* Toolkit */
+        App::render_toolkit(self, music_player[1], buffer);
 
         // frame.render_widget(
         //     Paragraph::new("Player")
@@ -288,7 +414,7 @@ fn visit_dirs(dir: &Path) -> Vec<Track> {
                 if !path.is_dir() {
                     let p = path.to_str().unwrap_or_default();
                     if p.ends_with(".mp3") {
-                        tracks.push(Track::new(p.split("\\").last().unwrap_or_default().to_string(), path.to_str().unwrap_or_default().to_owned(), 0));
+                        tracks.push(Track::new(p.split("\\").last().unwrap_or_default().to_string(), path.to_str().unwrap_or_default().to_owned()));
                     }
                 }
             }
