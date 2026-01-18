@@ -1,12 +1,10 @@
 use std::fmt::Debug;
-use std::i64::MAX;
 use std::io::BufReader;
 use std::time::{Duration, Instant};
 use std::{cmp, env, io};
 use std::fs::{self, File};
 use std::path::Path;
 
-use color_eyre::owo_colors::OwoColorize;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::DefaultTerminal;
 use ratatui::prelude::*;
@@ -17,7 +15,6 @@ use rodio::{OutputStream, Sink};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::probe::Hint;
 use symphonia::default::get_probe;
-use tui_big_text::{BigText, PixelSize};
 
 pub struct App {
     playlist: Playlist,
@@ -30,6 +27,7 @@ pub struct App {
     mode: u8,
     navigation: u8,
     state: AppState,
+    toolState: ListState
 }
 
 /* Modes: (1) normal mode, (2) repeat mode, (3) shuffle mode */
@@ -54,6 +52,30 @@ enum AppState {
     Running,
     Started,
     Quitting,
+}
+
+struct Control {
+    label: String, 
+    state: ControlState
+}
+
+enum ControlState {
+    Normal,
+    Active
+}
+
+impl Control {
+    fn new(label: String) -> Self {
+        Control {
+            label,
+            state: ControlState::Normal
+        }
+    }
+
+    fn state(mut self, state: ControlState) -> Self {
+        self.state = state;
+        self
+    }
 }
 
 const SELECTED_STYLE: Style = Style::new().bg(SLATE.c800).add_modifier(Modifier::BOLD);
@@ -134,6 +156,7 @@ impl App {
             state: AppState::Started,
             ratio: 0,
             navigation: 1,
+            toolState: ListState::default(),
         }
     }
 
@@ -211,7 +234,7 @@ impl App {
             .direction(Direction::Horizontal)
             .constraints(vec![
                 Constraint::Percentage(20), /* Repeat */
-                Constraint::Percentage(60), /* play */
+                Constraint::Percentage(80), /* Control */
                 Constraint::Percentage(20), /* shuffle */
             ])
             .split(area);
@@ -273,25 +296,28 @@ impl App {
                     .border_type(BorderType::Rounded)
             )
         .render(play[2], buf);
-    
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
             return;
         }
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.state = AppState::Quitting,
-            KeyCode::Char('h') | KeyCode::Left => self.select_none(),
-            KeyCode::Char('j') | KeyCode::Down => self.select_next(),
-            KeyCode::Char('k') | KeyCode::Up => self.select_previous(),
-            KeyCode::Char('g') | KeyCode::Home => self.select_first(),
-            KeyCode::Char('G') | KeyCode::End => self.select_last(),
-            KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter => {
-                self.toggle_status();                 
+
+        if self.navigation == 1 {
+            match key.code {
+                KeyCode::Char('q') | KeyCode::Esc => self.state = AppState::Quitting,
+                KeyCode::Char('h') | KeyCode::Left => self.select_none(),
+                KeyCode::Char('j') | KeyCode::Down => self.select_next(),
+                KeyCode::Char('k') | KeyCode::Up => self.select_previous(),
+                KeyCode::Char('g') | KeyCode::Home => self.select_first(),
+                KeyCode::Char('G') | KeyCode::End => self.select_last(),
+                KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter => {
+                    self.toggle_status();                 
+                }
+                _ => {}
             }
-            _ => {}
         }
+        
     }
 
     fn select_none(&mut self) {
@@ -352,33 +378,36 @@ impl App {
     }
 
     fn calculate_ratio(&self) -> u64 {
-        cmp::max((self.position.as_secs() * 100) / self.current.duration, 100)
+        cmp::min((self.position.as_secs() * 100) / self.current.duration, 100)
     }
+}
+
+fn make_tool(text: String) -> Paragraph<'static> {
+    Paragraph::new(text)
+        .centered()
+        .style(Style::default().fg(tailwind::CYAN.c400).bg(tailwind::SLATE.c950))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+        )
 }
 
 impl Widget for &mut App {
     fn render(self, area: Rect, buffer: &mut Buffer) {
-        let layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(vec![
-                Constraint::Percentage(85), /* Player */
-                Constraint::Percentage(15), /* Commands */
-            ])
-            .split(area);
-
         let general_layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(vec![
                 Constraint::Percentage(30), /* File Explorer */
                 Constraint::Percentage(70), /* Music Player */
             ])
-            .split(layout[0]);
+            .split(area);
 
         let music_player = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vec![
-                Constraint::Percentage(70), /* Information */
-                Constraint::Percentage(30), /* Toolkit */
+                Constraint::Percentage(80), /* Information */
+                Constraint::Percentage(20), /* Toolkit */
             ])
             .split(general_layout[1]);
         
@@ -390,16 +419,6 @@ impl Widget for &mut App {
 
         /* Toolkit */
         App::render_toolkit(self, music_player[1], buffer);
-
-        // frame.render_widget(
-        //     Paragraph::new("Player")
-        //         .block(Block::new().borders(Borders::ALL)),
-        //     music_player[1]);
-
-        // frame.render_widget(
-        //     Paragraph::new("Commands")
-        //         .block(Block::new().borders(Borders::ALL)),
-        //     layout[1]);
     }
 }
 
