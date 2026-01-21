@@ -11,7 +11,7 @@ use ratatui::prelude::*;
 use ratatui::style::palette::tailwind::{self, SLATE};
 use ratatui::widgets::{Block, BorderType, Borders, Gauge, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph};
 
-use rodio::{OutputStream, Sink};
+use rodio::{OutputStream, Sink, math};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::probe::Hint;
 use symphonia::default::get_probe;
@@ -27,7 +27,16 @@ pub struct App {
     mode: u8,
     navigation: u8,
     state: AppState,
-    toolState: ListState
+    currentButton: ControlButton
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum ControlButton {
+    Repeat,
+    Previous,
+    Play,
+    Next,
+    Shuffle
 }
 
 /* Modes: (1) normal mode, (2) repeat mode, (3) shuffle mode */
@@ -54,30 +63,6 @@ enum AppState {
     Quitting,
 }
 
-struct Control {
-    label: String, 
-    state: ControlState
-}
-
-enum ControlState {
-    Normal,
-    Active
-}
-
-impl Control {
-    fn new(label: String) -> Self {
-        Control {
-            label,
-            state: ControlState::Normal
-        }
-    }
-
-    fn state(mut self, state: ControlState) -> Self {
-        self.state = state;
-        self
-    }
-}
-
 const SELECTED_STYLE: Style = Style::new().bg(SLATE.c800).add_modifier(Modifier::BOLD);
 
 fn main() -> color_eyre::Result<()> {
@@ -91,8 +76,6 @@ fn main() -> color_eyre::Result<()> {
     let tracks = visit_dirs(Path::new(&args[1]));
 
     let app = App::new(&tracks);
-
-    // println!("{:?}", y);
 
     ratatui::run(|terminal| app.run(terminal, tracks.to_vec()))?;
     Ok(())
@@ -156,7 +139,7 @@ impl App {
             state: AppState::Started,
             ratio: 0,
             navigation: 1,
-            toolState: ListState::default(),
+            currentButton: ControlButton::Play,
         }
     }
 
@@ -239,9 +222,18 @@ impl App {
             ])
             .split(area);
 
+        let default_style = Style::default().fg(tailwind::CYAN.c400).bg(tailwind::SLATE.c950);
+        let selected_style = Style::default().fg(tailwind::CYAN.c400).bg(tailwind::CYAN.c600);
+
         Paragraph::new("↻")
             .centered()
-            .style(Style::default().fg(tailwind::CYAN.c400).bg(tailwind::SLATE.c950))
+            .style({
+                if self.currentButton == ControlButton::Repeat {
+                    selected_style
+                } else {
+                    default_style
+                }
+            })
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -251,7 +243,13 @@ impl App {
 
         Paragraph::new("↳↰")
             .centered()
-            .style(Style::default().fg(tailwind::CYAN.c400).bg(tailwind::SLATE.c950))
+            .style({
+                if self.currentButton == ControlButton::Shuffle {
+                    selected_style
+                } else {
+                    default_style
+                }
+            })
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -269,7 +267,13 @@ impl App {
 
         Paragraph::new("⏮")
             .centered()
-            .style(Style::default().fg(tailwind::CYAN.c400).bg(tailwind::SLATE.c950))
+            .style({
+                if self.currentButton == ControlButton::Previous {
+                    selected_style
+                } else {
+                    default_style
+                }
+            })
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -279,7 +283,13 @@ impl App {
 
     Paragraph::new("▶")
             .centered()
-            .style(Style::default().fg(tailwind::CYAN.c400).bg(tailwind::SLATE.c950))
+            .style({
+                if self.currentButton == ControlButton::Play {
+                    selected_style
+                } else {
+                    default_style
+                }
+            })
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -289,7 +299,13 @@ impl App {
 
     Paragraph::new("⏭")
             .centered()
-            .style(Style::default().fg(tailwind::CYAN.c400).bg(tailwind::SLATE.c950))
+            .style({
+                if self.currentButton == ControlButton::Next {
+                    selected_style
+                } else {
+                    default_style
+                }
+            })
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -303,19 +319,32 @@ impl App {
             return;
         }
 
-        if self.navigation == 1 {
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => self.state = AppState::Quitting,
-                KeyCode::Char('h') | KeyCode::Left => self.select_none(),
-                KeyCode::Char('j') | KeyCode::Down => self.select_next(),
-                KeyCode::Char('k') | KeyCode::Up => self.select_previous(),
-                KeyCode::Char('g') | KeyCode::Home => self.select_first(),
-                KeyCode::Char('G') | KeyCode::End => self.select_last(),
-                KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter => {
-                    self.toggle_status();                 
+        match self.navigation {
+            1 => 
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => self.state = AppState::Quitting,
+                    KeyCode::Char('h') | KeyCode::Left => self.select_none(),
+                    KeyCode::Char('j') | KeyCode::Down => self.select_next(),
+                    KeyCode::Char('k') | KeyCode::Up => self.select_previous(),
+                    KeyCode::Char('g') | KeyCode::Home => self.select_first(),
+                    KeyCode::Char('G') | KeyCode::End => self.select_last(),
+                    KeyCode::Tab => self.navigation = 2,
+                    KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter => {
+                        self.toggle_status();                 
+                    }
+                    _ => {}
                 }
+            2 => match key.code {
+                KeyCode::Tab => self.navigation = 1,
+                KeyCode::Char('q') | KeyCode::Esc => self.state = AppState::Quitting,
+                KeyCode::Char('h') | KeyCode::Left => self.select_left(),
+                KeyCode::Char('j') | KeyCode::Right => self.select_right(),
+                KeyCode::Char('l') | KeyCode::Enter => {
+                        self.toggle_control_status();                 
+                    }
                 _ => {}
             }
+            _ => {}
         }
         
     }
@@ -353,6 +382,35 @@ impl App {
         }
     }
 
+    fn select_left(&mut self) {
+        let buttons = vec![ControlButton::Repeat, ControlButton::Previous, ControlButton::Play, ControlButton::Next, ControlButton::Shuffle];
+
+        let current_control_index = buttons.iter().position(|c| c == &self.currentButton).unwrap_or_default();
+        
+        if current_control_index == 0 {
+            self.currentButton = ControlButton::Shuffle;
+        } else {
+            self.currentButton = buttons[(current_control_index - 1) % buttons.len()];
+        }
+    }
+
+    fn select_right(&mut self) {
+        let buttons = vec![ControlButton::Repeat, ControlButton::Previous, ControlButton::Play, ControlButton::Next, ControlButton::Shuffle];
+
+        let current_control_index = buttons.iter().position(|c| c == &self.currentButton).unwrap_or_default();
+        self.currentButton = buttons[(current_control_index + 1) % buttons.len()];
+    }
+
+    fn toggle_control_status(&mut self) {
+        match self.currentButton {
+            ControlButton::Repeat => self.mode = 1,
+            ControlButton::Previous => self.select_next(),
+            ControlButton::Play => self.stop_track(),
+            ControlButton::Next => self.select_previous(),
+            ControlButton::Shuffle => self.mode = 2,
+        }
+    }
+
     fn play_track(&mut self) {
         self.stop_track();
 
@@ -380,17 +438,6 @@ impl App {
     fn calculate_ratio(&self) -> u64 {
         cmp::min((self.position.as_secs() * 100) / self.current.duration, 100)
     }
-}
-
-fn make_tool(text: String) -> Paragraph<'static> {
-    Paragraph::new(text)
-        .centered()
-        .style(Style::default().fg(tailwind::CYAN.c400).bg(tailwind::SLATE.c950))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-        )
 }
 
 impl Widget for &mut App {
@@ -441,7 +488,6 @@ fn visit_dirs(dir: &Path) -> Vec<Track> {
 
     tracks
 }
-
 
 const fn alternate_colors(i: usize) -> Color {
     if i % 2 == 0 {
