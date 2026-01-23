@@ -9,16 +9,19 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::DefaultTerminal;
 use ratatui::prelude::*;
 use ratatui::style::palette::tailwind::{self, SLATE};
-use ratatui::widgets::{Block, BorderType, Borders, Gauge, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph};
+use ratatui::widgets::{Block, Borders, Gauge, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph};
 
-use rodio::{OutputStream, Sink, math};
+use rodio::{OutputStream, Sink};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::probe::Hint;
 use symphonia::default::get_probe;
 
+// use std::rand::{task_rng, Rng};
+
 pub struct App {
     playlist: Playlist,
     current: Track,
+    current_index: usize,
     sink: Sink,
     stream: OutputStream,
     start_time: Instant,
@@ -27,7 +30,13 @@ pub struct App {
     mode: u8,
     navigation: u8,
     state: AppState,
-    currentButton: ControlButton
+    control: Control
+}
+
+struct Control {
+    button: ControlButton,
+    selected: bool,
+    active: bool
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -131,6 +140,7 @@ impl App {
         App {
             playlist: Playlist { tracks: tracks.to_vec(), state: ListState::default() },
             current: tracks[0].clone(),
+            current_index: 0,
             sink,
             stream,
             mode: 1,
@@ -139,7 +149,7 @@ impl App {
             state: AppState::Started,
             ratio: 0,
             navigation: 1,
-            currentButton: ControlButton::Play,
+            control: Control { button: ControlButton::Play, selected: true, active: false },
         }
     }
 
@@ -191,18 +201,73 @@ impl App {
     }
 
     fn render_information(&mut self, area: Rect, buf: &mut Buffer) {
+        let information =  Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![
+                Constraint::Percentage(10), /* Song Title */
+                Constraint::Percentage(90), /* Extra */
+            ])
+            .split(area);
+
+        let extra = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![
+                Constraint::Percentage(10), /* Position */
+                Constraint::Percentage(40), /* Mode */
+                Constraint::Percentage(40), /* Navigation */
+                Constraint::Percentage(10), /* Duration */
+            ])
+            .split(information[1]);
+
+        // Block::new()
+        //     .borders(Borders::TOP)
+        //     .bg(SLATE.c950)
+        //     .render(information[0], buf);
+
+        Block::new()
+            .borders(Borders::TOP)
+            .bg(SLATE.c950)
+            .render(information[1], buf);
+
+        Line::from(self.elapsed_duration().to_string()).render(extra[0], buf);
+        
+        Line::from(self.get_mode())
+            .alignment(HorizontalAlignment::Center)
+            .render(extra[1], buf);
+
+        Line::from(self.get_navigation())
+            .alignment(HorizontalAlignment::Center)
+            .render(extra[2], buf);
+
+        Line::from(self.current.duration.to_string())
+            .alignment(HorizontalAlignment::Right)
+            .render(extra[3], buf);
+    }
+
+    fn get_mode(&self) -> String {
+        match self.mode {
+            1 => "Normal".to_owned(),
+            2 => "Repeat".to_owned(),
+            3 => "Shuffle".to_owned(),
+            _ => "Not Selected".to_owned()
+        }
+    }
+
+    fn get_navigation(&self) -> String {
+        match self.navigation {
+            1 => "Playlist".to_owned(),
+            2 => "Toolkit".to_owned(),
+            _ => "Not Selected".to_owned()
+        }
+    }
+
+    fn render_gauge(&mut self, area: Rect, buf: &mut Buffer) {
         let title = Line::raw(self.current.name.clone()).centered()
             .bg(SLATE.c950);
 
-        let total_duration = Line::raw(self.current.duration.to_string());
-
-        let elapsed = Line::from(self.elapsed_duration().to_string()).left_aligned();
-
         let block = Block::new()
             .title(title)
-            .title_bottom(total_duration)
-            .title_top(elapsed)
-            .borders(Borders::ALL)
+            .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
             .bg(SLATE.c950);
 
         Gauge::default()
@@ -222,13 +287,13 @@ impl App {
             ])
             .split(area);
 
-        let default_style = Style::default().fg(tailwind::CYAN.c400).bg(tailwind::SLATE.c950);
-        let selected_style = Style::default().fg(tailwind::CYAN.c400).bg(tailwind::CYAN.c600);
+        let default_style = Style::default().fg(tailwind::CYAN.c200);
+        let selected_style = Style::default().fg(tailwind::YELLOW.c400);
 
         Paragraph::new("↻")
             .centered()
             .style({
-                if self.currentButton == ControlButton::Repeat {
+                if self.control.button == ControlButton::Repeat {
                     selected_style
                 } else {
                     default_style
@@ -237,14 +302,13 @@ impl App {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
             )
         .render(toolkit[0], buf);
 
         Paragraph::new("↳↰")
             .centered()
             .style({
-                if self.currentButton == ControlButton::Shuffle {
+                if self.control.button == ControlButton::Shuffle {  
                     selected_style
                 } else {
                     default_style
@@ -253,7 +317,6 @@ impl App {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
             )
         .render(toolkit[2], buf);
 
@@ -268,7 +331,7 @@ impl App {
         Paragraph::new("⏮")
             .centered()
             .style({
-                if self.currentButton == ControlButton::Previous {
+                if self.control.button == ControlButton::Previous {
                     selected_style
                 } else {
                     default_style
@@ -277,14 +340,13 @@ impl App {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
             )
         .render(play[0], buf);
-
-    Paragraph::new("▶")
+ 
+    Paragraph::new(if self.current.playing {"P"} else {"▶"})
             .centered()
             .style({
-                if self.currentButton == ControlButton::Play {
+                if self.control.button == ControlButton::Play {
                     selected_style
                 } else {
                     default_style
@@ -293,14 +355,13 @@ impl App {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
             )
         .render(play[1], buf);
 
     Paragraph::new("⏭")
             .centered()
             .style({
-                if self.currentButton == ControlButton::Next {
+                if self.control.button == ControlButton::Next {
                     selected_style
                 } else {
                     default_style
@@ -309,7 +370,6 @@ impl App {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
             )
         .render(play[2], buf);
     }
@@ -354,11 +414,27 @@ impl App {
     }
 
     fn select_next(&mut self) {
-        self.playlist.state.select_next();
+        // self.playlist.state.select_next();
+        let idx = self.current_index;
+
+        self.current_index = (idx + 1) % self.playlist.tracks.len();
+
+        self.playlist.state.select(Some(self.current_index));
     }
 
     fn select_previous(&mut self) {
-        self.playlist.state.select_previous();
+        // self.playlist.state.select_previous();
+        
+        let idx = self.current_index;
+
+        if idx == 0 {
+            self.select_last();
+            self.current_index = self.playlist.tracks.len() - 1;
+        } else {
+            self.current_index = (idx - 1) % self.playlist.tracks.len();
+
+            self.playlist.state.select(Some(self.current_index));
+        }
     }
 
     fn select_first(&mut self) {
@@ -385,29 +461,64 @@ impl App {
     fn select_left(&mut self) {
         let buttons = vec![ControlButton::Repeat, ControlButton::Previous, ControlButton::Play, ControlButton::Next, ControlButton::Shuffle];
 
-        let current_control_index = buttons.iter().position(|c| c == &self.currentButton).unwrap_or_default();
+        let current_control_index = buttons.iter().position(|c| c == &self.control.button).unwrap_or_default();
         
         if current_control_index == 0 {
-            self.currentButton = ControlButton::Shuffle;
+            self.control = Control { button: ControlButton::Shuffle, selected: true, active: false };
         } else {
-            self.currentButton = buttons[(current_control_index - 1) % buttons.len()];
+            self.control.button = buttons[(current_control_index - 1) % buttons.len()];
+            self.control.selected = true;
         }
     }
 
     fn select_right(&mut self) {
         let buttons = vec![ControlButton::Repeat, ControlButton::Previous, ControlButton::Play, ControlButton::Next, ControlButton::Shuffle];
 
-        let current_control_index = buttons.iter().position(|c| c == &self.currentButton).unwrap_or_default();
-        self.currentButton = buttons[(current_control_index + 1) % buttons.len()];
+        let current_control_index = buttons.iter().position(|c| c == &self.control.button).unwrap_or_default();
+        self.control.button = buttons[(current_control_index + 1) % buttons.len()];
     }
 
     fn toggle_control_status(&mut self) {
-        match self.currentButton {
-            ControlButton::Repeat => self.mode = 1,
-            ControlButton::Previous => self.select_next(),
-            ControlButton::Play => self.stop_track(),
-            ControlButton::Next => self.select_previous(),
-            ControlButton::Shuffle => self.mode = 2,
+        match self.control.button {
+            ControlButton::Repeat => {
+                match self.mode {
+                    2 => self.mode = 1,
+                    _ => self.mode = 2
+                }
+            },
+            ControlButton::Previous => {
+                self.select_previous();
+                self.current = self.playlist.tracks.get(self.current_index).unwrap().clone();
+                self.play_track();
+            },
+            ControlButton::Play => {
+                match self.current.playing {
+                    true => self.stop_track(),
+                    false => self.play_track(),
+                }
+            },
+            ControlButton::Next => {
+                match self.mode {
+                    1 => {
+                        let to_play = task_rng().gen_range(0, self.playlist.tracks.len())
+                        self.select_next();
+                        self.current = self.playlist.tracks.get(self.current_index).unwrap().clone();
+                        self.play_track();
+                    },
+                    _ => {
+                        self.select_next();
+                        self.current = self.playlist.tracks.get(self.current_index).unwrap().clone();
+                        self.play_track();
+                    }
+                }
+                
+            },
+            ControlButton::Shuffle => {
+                match self.mode {
+                    3 => self.mode = 1,
+                    _ => self.mode = 3
+                }
+            }
         }
     }
 
@@ -415,6 +526,7 @@ impl App {
         self.stop_track();
 
         self.state = AppState::Running;
+        self.current.playing = true;
 
         let file = BufReader::new(File::open(self.current.path.clone()).unwrap());
         
@@ -424,6 +536,8 @@ impl App {
     fn stop_track(&mut self) {
         self.state = AppState::Started;
         self.start_time = Instant::now();
+        self.current.playing = false;
+        self.sink = rodio::Sink::connect_new(&self.stream.mixer());
     }
 
     fn elapsed_duration(&mut self) -> u64 {
@@ -457,12 +571,28 @@ impl Widget for &mut App {
                 Constraint::Percentage(20), /* Toolkit */
             ])
             .split(general_layout[1]);
-        
+
+        let information = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![
+                Constraint::Percentage(50), /* Informatiom */
+                Constraint::Percentage(50), /* Progression gauge */
+            ])
+            .split(music_player[0]);
+
         /* File Explorer */
         App::render_explorer(self, general_layout[0], buffer);
 
+        Block::new()
+            .borders(Borders::ALL)
+            .bg(SLATE.c950)
+            .render(music_player[0], buffer);
+
         /* Information */
-        App::render_information(self, music_player[0], buffer);
+        App::render_information(self, information[1], buffer);
+
+        /* Progression Gauge */
+        App::render_gauge(self, information[0], buffer);
 
         /* Toolkit */
         App::render_toolkit(self, music_player[1], buffer);
