@@ -6,17 +6,16 @@ use std::fs::{self, File};
 use std::path::Path;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use rand::Rng;
 use ratatui::DefaultTerminal;
 use ratatui::prelude::*;
 use ratatui::style::palette::tailwind::{self, SLATE};
-use ratatui::widgets::{Block, Borders, Gauge, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Gauge, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph};
 
 use rodio::{OutputStream, Sink};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::probe::Hint;
 use symphonia::default::get_probe;
-
-// use std::rand::{task_rng, Rng};
 
 pub struct App {
     playlist: Playlist,
@@ -87,6 +86,7 @@ fn main() -> color_eyre::Result<()> {
     let app = App::new(&tracks);
 
     ratatui::run(|terminal| app.run(terminal, tracks.to_vec()))?;
+    ratatui::restore();
     Ok(())
 }
 
@@ -158,9 +158,10 @@ impl App {
         
         while self.state != AppState::Quitting {
             terminal.draw(|frame| frame.render_widget(&mut self, frame.area()))?;
+            self.update();
+            
             if let Event::Key(key) = event::read()? {
                 self.handle_key(key);
-                self.update();
             };
         }
         Ok(())
@@ -171,8 +172,11 @@ impl App {
             return;
         }
 
-        self.position = Duration::from_secs(self.elapsed_duration());
-        self.ratio = self.calculate_ratio();
+        if self.current.playing && self.state == AppState::Running {
+            self.position = Duration::from_secs(self.elapsed_duration());
+            self.ratio = self.calculate_ratio();
+        }
+        
     }
 
     fn render_explorer(&mut self, area: Rect, buf: &mut Buffer) {
@@ -219,29 +223,50 @@ impl App {
             ])
             .split(information[1]);
 
-        // Block::new()
-        //     .borders(Borders::TOP)
-        //     .bg(SLATE.c950)
-        //     .render(information[0], buf);
-
         Block::new()
             .borders(Borders::TOP)
             .bg(SLATE.c950)
             .render(information[1], buf);
 
-        Line::from(self.elapsed_duration().to_string()).render(extra[0], buf);
-        
-        Line::from(self.get_mode())
+        Paragraph::new(self.elapsed_duration().to_string())
+            .style(Style::default().fg(Color::Yellow))
             .alignment(HorizontalAlignment::Center)
-            .render(extra[1], buf);
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Elapsed")
+                    .border_type(BorderType::Rounded)
+            ).render(extra[0], buf);
 
-        Line::from(self.get_navigation())
+        Paragraph::new(self.get_mode())
+            .style(Style::default().fg(Color::Yellow))
             .alignment(HorizontalAlignment::Center)
-            .render(extra[2], buf);
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Mode")
+                    .border_type(BorderType::Rounded)
+            ).render(extra[1], buf);
 
-        Line::from(self.current.duration.to_string())
-            .alignment(HorizontalAlignment::Right)
-            .render(extra[3], buf);
+        Paragraph::new(self.get_navigation())
+            .style(Style::default().fg(Color::Yellow))
+            .alignment(HorizontalAlignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Navigation")
+                    .border_type(BorderType::Rounded)
+            ).render(extra[2], buf);
+
+        Paragraph::new(self.current.duration.to_string())
+            .style(Style::default().fg(Color::Yellow))
+            .alignment(HorizontalAlignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Duration")
+                    .border_type(BorderType::Rounded)
+            ).render(extra[3], buf);
     }
 
     fn get_mode(&self) -> String {
@@ -499,10 +524,14 @@ impl App {
             },
             ControlButton::Next => {
                 match self.mode {
-                    1 => {
-                        let to_play = task_rng().gen_range(0, self.playlist.tracks.len())
-                        self.select_next();
-                        self.current = self.playlist.tracks.get(self.current_index).unwrap().clone();
+                    3 => {
+                        let length = self.playlist.tracks.len();
+
+                        let mut range = rand::rng();
+                        let to_play = range.random_range(0..length) as usize;
+
+                        self.playlist.state.select(Some(to_play));
+                        self.current = self.playlist.tracks.get(to_play).unwrap().clone();
                         self.play_track();
                     },
                     _ => {
@@ -534,6 +563,7 @@ impl App {
     }
 
     fn stop_track(&mut self) {
+        self.current.playing = false;
         self.state = AppState::Started;
         self.start_time = Instant::now();
         self.current.playing = false;
@@ -575,8 +605,9 @@ impl Widget for &mut App {
         let information = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vec![
-                Constraint::Percentage(50), /* Informatiom */
-                Constraint::Percentage(50), /* Progression gauge */
+                Constraint::Percentage(60), /* Progression gauge */
+                Constraint::Percentage(20), /* Space */
+                Constraint::Percentage(20), /* Informatiom */
             ])
             .split(music_player[0]);
 
@@ -589,7 +620,12 @@ impl Widget for &mut App {
             .render(music_player[0], buffer);
 
         /* Information */
-        App::render_information(self, information[1], buffer);
+        App::render_information(self, information[2], buffer);
+
+        /* Space */
+        Block::new()
+            .bg(tailwind::SLATE.c950)
+            .render(information[1], buffer);
 
         /* Progression Gauge */
         App::render_gauge(self, information[0], buffer);
