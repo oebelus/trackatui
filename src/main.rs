@@ -153,6 +153,24 @@ impl App {
         }
     }
 
+    fn handle_end(&mut self) {
+        match self.mode {
+            2 => self.play_track(),
+            3 => self.play_random(),
+            _ => {}
+        }
+    }
+
+    fn play_random(&mut self) {
+        let length = self.playlist.tracks.len();
+        let to_play = get_random_index(length);
+
+        self.playlist.state.select(Some(to_play));
+        self.current = self.playlist.tracks.get(to_play).unwrap().clone();
+        
+        self.play_track();
+    }
+
     pub fn run(mut self, terminal: &mut DefaultTerminal, tracks: Vec<Track>) -> io::Result<()> {        
         self.playlist.tracks = tracks;
         
@@ -177,6 +195,9 @@ impl App {
             self.ratio = self.calculate_ratio();
         }
         
+        if self.position.as_secs() >= self.current.duration - 5 {
+            self.handle_end();
+        }
     }
 
     fn render_explorer(&mut self, area: Rect, buf: &mut Buffer) {
@@ -368,7 +389,7 @@ impl App {
             )
         .render(play[0], buf);
  
-    Paragraph::new(if self.current.playing {"P"} else {"▶"})
+    Paragraph::new(if self.current.playing {"||"} else {"▶"})
             .centered()
             .style({
                 if self.control.button == ControlButton::Play {
@@ -512,9 +533,14 @@ impl App {
                 }
             },
             ControlButton::Previous => {
-                self.select_previous();
-                self.current = self.playlist.tracks.get(self.current_index).unwrap().clone();
-                self.play_track();
+                if self.position.as_secs() > 5 {
+                    self.position = Duration::new(0, 0);
+                    self.play_track();
+                } else {
+                    self.select_previous();
+                    self.current = self.playlist.tracks.get(self.current_index).unwrap().clone();
+                    self.play_track();
+                }
             },
             ControlButton::Play => {
                 match self.current.playing {
@@ -525,14 +551,7 @@ impl App {
             ControlButton::Next => {
                 match self.mode {
                     3 => {
-                        let length = self.playlist.tracks.len();
-
-                        let mut range = rand::rng();
-                        let to_play = range.random_range(0..length) as usize;
-
-                        self.playlist.state.select(Some(to_play));
-                        self.current = self.playlist.tracks.get(to_play).unwrap().clone();
-                        self.play_track();
+                        self.play_random();
                     },
                     _ => {
                         self.select_next();
@@ -590,15 +609,15 @@ impl Widget for &mut App {
             .direction(Direction::Horizontal)
             .constraints(vec![
                 Constraint::Percentage(30), /* File Explorer */
-                Constraint::Percentage(70), /* Music Player */
+                Constraint::Fill(70), /* Music Player */
             ])
             .split(area);
 
         let music_player = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vec![
-                Constraint::Percentage(80), /* Information */
-                Constraint::Percentage(20), /* Toolkit */
+                Constraint::Fill(80), /* Information */
+                Constraint::Length(3), /* Toolkit */
             ])
             .split(general_layout[1]);
 
@@ -607,7 +626,7 @@ impl Widget for &mut App {
             .constraints(vec![
                 Constraint::Percentage(60), /* Progression gauge */
                 Constraint::Percentage(20), /* Space */
-                Constraint::Percentage(20), /* Informatiom */
+                Constraint::Length(3), /* Informatiom */
             ])
             .split(music_player[0]);
 
@@ -653,6 +672,11 @@ fn visit_dirs(dir: &Path) -> Vec<Track> {
     }
 
     tracks
+}
+
+fn get_random_index(length: usize) -> usize {
+    let mut range = rand::rng();
+    range.random_range(0..length)
 }
 
 const fn alternate_colors(i: usize) -> Color {
