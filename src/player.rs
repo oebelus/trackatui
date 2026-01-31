@@ -34,6 +34,7 @@ pub struct Player {
     state: AppState,
     control: Control,
     searching: String,
+    is_paused: bool
 }
 
 #[derive(Debug, Default)]
@@ -77,6 +78,7 @@ impl Player {
             control: Control { button: ControlButton::Play, selected: true },
             last_played: 0,
             searching: String::from(""),
+            is_paused: false
         }
     }
 
@@ -147,7 +149,7 @@ impl Player {
         let search = match self.searching.as_str() {
             "" => {
                 if self.navigation == 3 {
-                    "Type something :3"
+                    "Type something."
                 } else {
                     "Type '/' to search for a track."
                 }
@@ -592,26 +594,31 @@ impl Player {
     }
 
     fn play_track(&mut self) {
-        let source = Decoder::new(BufReader::new(File::open(self.current.path.clone()).unwrap())).unwrap();
-        let mut current_position = self.position;
-
-        if self.current_index == self.last_played {
+        if self.is_paused {
             self.pause_track();
+
+            let source = Decoder::new(BufReader::new(File::open(self.current.path.clone()).unwrap())).unwrap();
+            
+            let current_position = self.position;
+
+            self.sink.append(source.skip_duration(current_position));
         } else {
             self.stop_track();
-            current_position = Duration::from_secs(0);
+
+            let file = BufReader::new(File::open(self.current.path.clone()).unwrap());
+            self.sink = rodio::play(&self.stream.mixer(), file).unwrap();
         }
 
+        self.is_paused = false;
         self.state = AppState::Running;
         self.current.playing = true;
-
-        self.sink.append(source.skip_duration(current_position));
     }
 
     fn pause_track(&mut self) {
         self.current.playing = false;
         self.state = AppState::Started;
         self.sink = rodio::Sink::connect_new(&self.stream.mixer());
+        self.is_paused = true;
     }
 
     fn stop_track(&mut self) {
