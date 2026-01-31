@@ -42,3 +42,8 @@ The application presents two vertical views:
 - To toggle between Playlist (or Explorer) mode and toolkit mode: **Tab**. 
 - The Music is switched by pressing **top** and **down** arrows (or the corresponding vim bindings), selection is with **Enter**.
 - The toolkit mode is navigated with the **left** and **right** arrows, selection is with **Enter** key as well. 
+
+### To-Do :
+- [ ] The track should play from the last position (after pause);
+- [ ] Search for a track in the playlist;
+- [X] Move by -10s or +10s.
