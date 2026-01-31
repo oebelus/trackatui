@@ -9,7 +9,7 @@ use crate::utils::{alternate_colors, get_random_index};
 use ratatui::DefaultTerminal;
 use ratatui::prelude::*;
 use ratatui::style::palette::tailwind::{self, SLATE};
-use ratatui::widgets::{Block, BorderType, Borders, Gauge, HighlightSpacing, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Gauge, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph};
 
 use rodio::{Decoder, OutputStream, Sink, Source};
 
@@ -17,7 +17,7 @@ use crate::control::{Control, ControlButton};
 use crate::track::Track;
 
 /* Modes: (1) normal mode, (2) repeat mode, (3) shuffle mode */
-/* Navigation: (1) playlist, (2) toolkit */
+/* Navigation: (1) playlist, (2) toolkit, (3) Search */
 
 pub struct Player {
     playlist: Playlist,
@@ -33,6 +33,7 @@ pub struct Player {
     navigation: u8,
     state: AppState,
     control: Control,
+    searching: String,
 }
 
 #[derive(Debug, Default)]
@@ -75,6 +76,7 @@ impl Player {
             navigation: 1,
             control: Control { button: ControlButton::Play, selected: true },
             last_played: 0,
+            searching: String::from(""),
         }
     }
 
@@ -114,6 +116,13 @@ impl Player {
     }
 
     pub fn render_explorer(&mut self, area: Rect, buf: &mut Buffer) {
+        let general_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![
+                Constraint::Fill(90), /* Explorer */
+                Constraint::Length(3) /* Search */
+            ]).split(area);
+        
         let block = Block::new()
             .title(Line::raw("TRACKS").centered())
             .borders(Borders::ALL)
@@ -135,7 +144,27 @@ impl Player {
             .highlight_symbol(">")
             .highlight_spacing(HighlightSpacing::Always);
 
-        StatefulWidget::render(list, area, buf, &mut self.playlist.state)
+        let search = match self.searching.as_str() {
+            "" => {
+                if self.navigation == 3 {
+                    "Type something :3"
+                } else {
+                    "Type '/' to search for a track."
+                }
+            },
+            _ => &self.searching
+        };
+
+        Paragraph::new(search)
+            .style(Style::new().gray())
+            .block(
+                Block::new()
+                    .title("- [ Search ] ")
+                    .borders(Borders::ALL)
+                    .style(Style::new().light_cyan()).padding(Padding::left(2)))
+            .render(general_layout[1], buf);
+
+        StatefulWidget::render(list, area, buf, &mut self.playlist.state);
     }
 
     pub fn render_information(&mut self, area: Rect, buf: &mut Buffer) {
@@ -374,6 +403,7 @@ impl Player {
                     KeyCode::Char('k') | KeyCode::Up => self.select_previous(),
                     KeyCode::Char('g') | KeyCode::Home => self.select_first(),
                     KeyCode::Char('G') | KeyCode::End => self.select_last(),
+                    KeyCode::Char('/') => self.navigation = 3,
                     KeyCode::Tab => self.navigation = 2,
                     KeyCode::Char('l') | KeyCode::Right | KeyCode::Enter => {
                         self.toggle_status();                 
@@ -382,6 +412,7 @@ impl Player {
                 }
             2 => match key.code {
                 KeyCode::Tab => self.navigation = 1,
+                KeyCode::Char('/') => self.navigation = 3,
                 KeyCode::Char('q') | KeyCode::Esc => self.state = AppState::Quitting,
                 KeyCode::Char('h') | KeyCode::Left => self.select_left(),
                 KeyCode::Char('j') | KeyCode::Right => self.select_right(),
@@ -389,6 +420,14 @@ impl Player {
                         self.toggle_control_status();                 
                     }
                 _ => {}
+            }
+            3 => match key.code  {
+                KeyCode::Tab => self.navigation = 1,
+                KeyCode::Backspace => {
+                    if !self.searching.is_empty() {
+                        self.searching = self.searching[0..self.searching.len() - 1].to_owned()
+                    }},
+                _ => self.searching.push_str(&key.code.as_char().unwrap_or_default().to_string()),
             }
             _ => {}
         }
@@ -430,7 +469,7 @@ impl Player {
         self.playlist.state.select_first();
     }
 
-        fn select_last(&mut self) {
+    fn select_last(&mut self) {
         self.playlist.state.select_last();
     }
 
@@ -547,6 +586,7 @@ impl Player {
         match self.navigation {
             1 => "Playlist".to_owned(),
             2 => "Toolkit".to_owned(),
+            3 => "Search".to_owned(),
             _ => "Not Selected".to_owned()
         }
     }
