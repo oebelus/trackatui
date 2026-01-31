@@ -489,7 +489,7 @@ impl Player {
             },
             ControlButton::Play => {
                 match self.current.playing {
-                    true => self.stop_track(),
+                    true => self.pause_track(),
                     false => self.play_track(),
                 }
             },
@@ -553,18 +553,33 @@ impl Player {
 
     fn play_track(&mut self) {
         let source = Decoder::new(BufReader::new(File::open(self.current.path.clone()).unwrap())).unwrap();
+        let mut current_position = self.position;
 
         if self.current_index == self.last_played {
             self.pause_track();
         } else {
             self.stop_track();
+            current_position = Duration::from_secs(0);
         }
 
-        self.start_time = Instant::now();
         self.state = AppState::Running;
         self.current.playing = true;
 
-        self.sink.append(source);
+        self.sink.append(source.skip_duration(current_position));
+    }
+
+    fn pause_track(&mut self) {
+        self.current.playing = false;
+        self.state = AppState::Started;
+        self.sink = rodio::Sink::connect_new(&self.stream.mixer());
+    }
+
+    fn stop_track(&mut self) {
+        self.current.playing = false;
+        self.state = AppState::Started;
+        self.position = Duration::new(0, 0);
+        self.start_time = Instant::now();
+        self.sink = rodio::Sink::connect_new(&self.stream.mixer());
     }
 
     fn skip_ten(&mut self, direction: bool) {
@@ -599,20 +614,6 @@ impl Player {
         self.state = AppState::Running;
 
         self.sink.append(source.skip_duration(skip_duration));
-    }
-
-    fn pause_track(&mut self) {
-        self.current.playing = false;
-        self.state = AppState::Started;
-        self.sink = rodio::Sink::connect_new(&self.stream.mixer());
-    }
-
-    fn stop_track(&mut self) {
-        self.current.playing = false;
-        self.state = AppState::Started;
-        self.position = Duration::new(0, 0);
-        self.start_time = Instant::now();
-        self.sink = rodio::Sink::connect_new(&self.stream.mixer());
     }
 
     fn calculate_ratio(&self) -> u64 {

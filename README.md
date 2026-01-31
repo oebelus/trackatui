@@ -44,6 +44,6 @@ The application presents two vertical views:
 - The toolkit mode is navigated with the **left** and **right** arrows, selection is with **Enter** key as well. 
 
 ### To-Do :
-- [ ] The track should play from the last position (after pause);
+- [X] The track should play from the last position (after pause);
 - [ ] Search for a track in the playlist;
 - [X] Move by -10s or +10s.
