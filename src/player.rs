@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::io::BufReader;
 use std::time::{Duration, Instant};
-use std::{cmp, io};
+use std::cmp;
 use std::fs::File;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
@@ -12,6 +12,7 @@ use ratatui::style::palette::tailwind::{self, SLATE};
 use ratatui::widgets::{Block, BorderType, Borders, Gauge, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph};
 
 use rodio::{Decoder, OutputStream, Sink, Source};
+use color_eyre::Result;
 
 use crate::control::{Control, ControlButton};
 use crate::track::Track;
@@ -34,12 +35,13 @@ pub struct Player {
     state: AppState,
     control: Control,
     searching: String,
-    is_paused: bool
+    is_paused: bool,
+    duration_before_pause: Duration
 }
 
 #[derive(Debug, Default)]
 pub struct Playlist {
-    pub tracks: Vec<Track>,
+    pub tracks: Box<Vec<Track>>,
     pub state: ListState,
 }
 
@@ -64,7 +66,7 @@ impl Player {
         let sink = rodio::Sink::connect_new(&stream.mixer());
 
         Player {
-            playlist: Playlist { tracks: tracks.to_vec(), state: ListState::default() },
+            playlist: Playlist { tracks: Box::new(tracks.to_vec()), state: ListState::default() },
             current: tracks[0].clone(),
             current_index: 0,
             sink,
@@ -78,16 +80,18 @@ impl Player {
             control: Control { button: ControlButton::Play, selected: true },
             last_played: 0,
             searching: String::from(""),
-            is_paused: false
+            is_paused: false,
+            duration_before_pause: Duration::ZERO
         }
     }
 
-    pub fn run(mut self, terminal: &mut DefaultTerminal, tracks: Vec<Track>) -> io::Result<()> {        
-        self.playlist.tracks = tracks;
+    pub fn run(mut self, terminal: &mut DefaultTerminal, tracks: Vec<Track>) -> Result<()> {        
+        self.playlist.tracks = Box::new(tracks);
         
         while self.state != AppState::Quitting {
             terminal.draw(|frame| frame.render_widget(&mut self, frame.area()))?;
             self.update();
+            
             
             if let Event::Key(key) = event::read()? {
                 self.handle_key(key);
@@ -103,7 +107,7 @@ impl Player {
 
         if self.current.playing && self.state == AppState::Running {
             if self.position.as_secs() <= self.current.duration {
-                self.position = Instant::now() - self.start_time;
+                self.position = Instant::now() - self.start_time + self.duration_before_pause;
             } else {
                 self.position = Duration::new(self.current.duration, 0);
             }
@@ -561,7 +565,7 @@ impl Player {
         match self.mode {
             2 => self.play_track(),
             3 => self.play_random(),
-            _ => {}
+            _ => self.select_next(),
         }
     }
 
@@ -595,13 +599,15 @@ impl Player {
 
     fn play_track(&mut self) {
         if self.is_paused {
+            let current_position = self.position;
+
             self.pause_track();
 
             let source = Decoder::new(BufReader::new(File::open(self.current.path.clone()).unwrap())).unwrap();
-            
-            let current_position = self.position;
 
             self.sink.append(source.skip_duration(current_position));
+
+            self.is_paused = false;
         } else {
             self.stop_track();
 
@@ -619,6 +625,8 @@ impl Player {
         self.state = AppState::Started;
         self.sink = rodio::Sink::connect_new(&self.stream.mixer());
         self.is_paused = true;
+        self.duration_before_pause = self.position;
+        self.start_time = Instant::now();
     }
 
     fn stop_track(&mut self) {
@@ -653,7 +661,6 @@ impl Player {
                     skip_duration -= Duration::from_secs(10);
                     self.start_time += Duration::new(10, 0);
                 }
-
             },
         }
 

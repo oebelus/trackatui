@@ -46,4 +46,6 @@ The application presents two vertical views:
 ### To-Do :
 - [X] The track should play from the last position (after pause);
 - [ ] Search for a track in the playlist;
-- [X] Move by -10s or +10s.
+- [X] Move by -10s or +10s;
+- [X] Fixing the elapsed time bug (`self.position` not updating correctly after the track is paused);
+- [ ] Find music in nested directories. 
