@@ -4,7 +4,7 @@ A music player in the terminal using Ratatui and Rodio. Still work in progress. 
 
 ![screenshot](screenshot.png)
 
-## How to run.
+## How to run
 1. First, clone the repository:
 
 ```bash
@@ -19,7 +19,7 @@ git clone https://github.com/oebelus/trackatui.git
 cargo run <folder-name>
 ```
 
-## How to use. 
+## How to use 
 ### Presentation
 The application presents two vertical views:
 - The music explorer: the left view.
@@ -48,4 +48,4 @@ The application presents two vertical views:
 - [ ] Search for a track in the playlist;
 - [X] Move by -10s or +10s;
 - [X] Fixing the elapsed time bug (`self.position` not updating correctly after the track is paused);
-- [ ] Find music in nested directories. 
+- [ ] Find music in nested directories.
