@@ -39,9 +39,9 @@ The application presents two vertical views:
         - Toggle Shuffle Mode.
 
 ### Navigation
-- To toggle between Playlist (or Explorer) mode and toolkit mode: **Tab**;
-- The Music is switched by pressing **top** and **down** arrows (or the corresponding vim bindings), selection is with **Enter**;
-- The toolkit mode is navigated with the **left** and **right** arrows, selection is with **Enter** key as well.
+- To toggle between Playlist (or Explorer) mode and toolkit mode: **Tab**. 
+- The Music is switched by pressing **top** and **down** arrows (or the corresponding vim bindings), selection is with **Enter**.
+- The toolkit mode is navigated with the **left** and **right** arrows, selection is with **Enter** key as well. 
 
 ### To-Do :
 - [X] The track should play from the last position (after pause);
