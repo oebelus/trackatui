@@ -22,6 +22,7 @@ use crate::track::Track;
 
 pub struct Player {
     playlist: Playlist,
+    filtered_playlist: Box<Vec<Track>>,
     current: Track,
     current_index: usize,
     last_played: usize,
@@ -64,9 +65,10 @@ impl Player {
             .expect("open default audio stream");
 
         let sink = rodio::Sink::connect_new(&stream.mixer());
-
+        
         Player {
             playlist: Playlist { tracks: Box::new(tracks.to_vec()), state: ListState::default() },
+            filtered_playlist: Box::new(tracks.to_vec()),
             current: tracks[0].clone(),
             current_index: 0,
             sink,
@@ -135,8 +137,7 @@ impl Player {
             .bg(SLATE.c950);
 
         let songs: Vec<ListItem> = self
-            .playlist
-            .tracks
+            .filtered_playlist
             .iter()
             .enumerate()
             .map(|(i, track)| {
@@ -431,9 +432,13 @@ impl Player {
                 KeyCode::Tab => self.navigation = 1,
                 KeyCode::Backspace => {
                     if !self.searching.is_empty() {
-                        self.searching = self.searching[0..self.searching.len() - 1].to_owned()
+                        self.searching = self.searching[0..self.searching.len() - 1].to_owned();
+                        self.filter_playlist();
                     }},
-                _ => self.searching.push_str(&key.code.as_char().unwrap_or_default().to_string()),
+                _ => {
+                    self.searching.push_str(&key.code.as_char().unwrap_or_default().to_string());
+                    self.filter_playlist();
+                },
             }
             _ => {}
         }
@@ -672,6 +677,15 @@ impl Player {
 
     fn calculate_ratio(&self) -> u64 {
         cmp::min((self.position.as_secs() * 100) / self.current.duration, 100)
+    }
+
+    fn filter_playlist(&mut self) {
+        if self.searching.trim().is_empty() {
+            self.filtered_playlist = self.playlist.tracks.clone();
+            return
+        } else {
+            self.filtered_playlist = Box::new(self.playlist.tracks.clone().into_iter().filter(|track| track.name.to_lowercase().starts_with(&self.searching.trim().to_lowercase())).collect::<Vec<Track>>());
+        }
     }
 }
 
